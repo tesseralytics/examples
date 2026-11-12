@@ -23,7 +23,10 @@ opened later. Four rules make the resulting curve mean something:
   * one class per mechanism — fields are grouped by what they *measure*, fixed
     before the curve is looked at, so the classification cannot be circular;
   * the class median only over fields with a real zero-delay IC: a retention ratio
-    on a field with no edge is noise over noise.
+    on a field with no edge is noise over noise;
+  * an overlap-aware t (circular block bootstrap of length horizon + delay) and one
+    Benjamini–Hochberg bar across the whole search — then a replication run on
+    disjoint sub-panels, because a class claim has to survive a different slice.
 
 Companion code for the post "The two-hour lag discount: building factors you can
 actually trade" — https://tesseralytics.dev/blog/the-two-hour-lag-discount
@@ -40,16 +43,18 @@ Thirteen months (needs the history bundle behind the 30-day free window):
 
     uv run python lag-discount/lag_discount.py --months 2025-10:2026-10
 
-The analysis suite behind the published numbers — bootstrap t-statistics, a
-Benjamini–Hochberg family bar and the sub-sample replication — is the same
-measurement with those three diagnostics added.
+It prints, in order: the class curve, the per-factor ICs, the family bar (how many
+tests survive the search-wide threshold at each delay), and the replication check
+(the same contrast measured on time halves and liquidity tiers).
 """
 
 from __future__ import annotations
 
 import argparse
+from math import erfc, sqrt
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 import tessera
 
@@ -103,6 +108,10 @@ MIN_BASE_IC = 5e-3
 MIN_COVERAGE = 0.5
 #: Rank IC needs breadth: an hour with fewer coins than this is skipped.
 MIN_COINS = 25
+#: An IC series shorter than this cannot support a bootstrap t.
+MIN_HOURS = 24
+#: The family's false-discovery rate: one bar across every test in the search.
+ALPHA = 0.05
 #: Coins per API read. Every coin is one presigned request, so keep it modest
 #: enough not to trip the rate limit on a long run.
 CHUNK = 25
@@ -353,37 +362,115 @@ def rank_ic(df: pl.DataFrame, field: str, ret: str) -> pl.DataFrame:
     )
 
 
-def mean_ic(df: pl.DataFrame, field: str, k: int, lag: int, min_hours: int) -> float | None:
-    ic = rank_ic(df, field, f"ret_{k}_{lag}")["ic"]
-    return None if ic.len() < min_hours else float(ic.mean())
+def ic_series(df: pl.DataFrame, field: str, ret: str) -> np.ndarray:
+    return rank_ic(df, field, ret)["ic"].to_numpy()
 
 
-def evaluate(panel: pl.DataFrame) -> pl.DataFrame:
+def block_bootstrap_se(
+    x: np.ndarray, block: int, n_boot: int = 1000, seed: int = 0
+) -> float:
+    """Standard error of `mean(x)` under a circular block bootstrap.
+
+    Plain i.i.d. resampling is wrong here: consecutive ICs share overlapping
+    forward returns, so they are serially dependent. `block` is that dependence
+    length — the holding period `k` *plus* the entry delay `L`, because sliding the
+    entry makes the overlap longer than the label. A naive `ICIR * sqrt(n)` inflates
+    the t-statistic by roughly `sqrt(k + L)`.
+
+    Returns NaN rather than a number when the series cannot support a resample:
+    with fewer than two whole blocks every replicate is the same rotation, the SE
+    collapses, and the t-statistic becomes arbitrarily large.
+    """
+    x = x[np.isfinite(x)]
+    n = x.size
+    block = max(1, min(block, n))
+    if n < 3 or n < 2 * block:
+        return float("nan")
+    n_blocks = int(np.ceil(n / block))
+    rng = np.random.default_rng(seed)
+    starts = rng.integers(0, n, size=(n_boot, n_blocks))
+    idx = (starts[:, :, None] + np.arange(block)[None, None, :]) % n
+    idx = idx.reshape(n_boot, -1)[:, :n]
+    se = float(x[idx].mean(axis=1).std(ddof=1))
+    return se if np.isfinite(se) and se > 0 else float("nan")
+
+
+def two_sided_p(t: float | None) -> float:
+    """Normal-theory two-sided p-value for a t-statistic (bootstrap SE carried)."""
+    if t is None or not np.isfinite(t):
+        return float("nan")
+    return float(erfc(abs(t) / sqrt(2)))
+
+
+def bh_fdr(pvals: np.ndarray, alpha: float = 0.05) -> np.ndarray:
+    """Benjamini–Hochberg: True where the null is rejected, across the whole family."""
+    p_arr = np.asarray(pvals, dtype=float)
+    out = np.zeros(p_arr.shape, dtype=bool)
+    ok = np.isfinite(p_arr)
+    if not ok.any():
+        return out
+    order = np.flatnonzero(ok)[np.argsort(p_arr[ok])]
+    m = order.size
+    passed = p_arr[order] <= alpha * (np.arange(1, m + 1) / m)
+    if passed.any():
+        out[order[: np.max(np.flatnonzero(passed)) + 1]] = True
+    return out
+
+
+def measure(
+    sub: pl.DataFrame, field: str, k: int, lag: int, bootstrap: bool = True
+) -> tuple[float | None, float | None, float | None]:
+    """Mean IC, overlap-aware t, and the two-sided p for one (field, horizon, lag)."""
+    ics = ic_series(sub, field, f"ret_{k}_{lag}")
+    if ics.size < MIN_HOURS:
+        return None, None, None
+    mean = float(ics.mean())
+    if not bootstrap:
+        return mean, None, None
+    se = block_bootstrap_se(ics, block=k + lag)
+    t = mean / se if np.isfinite(se) else None
+    return mean, (float(t) if t is not None else None), two_sided_p(t)
+
+
+def evaluate(panel: pl.DataFrame, bootstrap: bool = True) -> pl.DataFrame:
+    """The whole grid, one row per (field, decision horizon, lag)."""
     rows = []
     for field, class_ in CLASSES.items():
-        k = DECISION_HORIZON[class_]
-        # Identical cells at every lag: keep a coin-hour only if every lag priced.
-        keep = pl.lit(True)
-        for lag in LAGS:
-            keep = keep & pl.col(f"ret_{k}_{lag}").is_not_null()
-        sub = panel.filter(keep)
-        base = mean_ic(sub, field, k, 0, min_hours=1)
-        if base is None or abs(base) < MIN_BASE_IC:
-            # No edge to lose: a retention ratio here would be noise over noise.
-            continue
-        for lag in LAGS:
-            ic = mean_ic(sub, field, k, lag, min_hours=1)
-            rows.append(
-                dict(
-                    field=field,
-                    class_=class_,
-                    horizon=k,
-                    lag=lag,
-                    ic=ic,
-                    retention=None if ic is None else ic / base,
+        for k in HORIZONS:
+            # Identical coin-hours at every delay: keep a cell only if every lag priced.
+            keep = pl.lit(True)
+            for lag in LAGS:
+                keep = keep & pl.col(f"ret_{k}_{lag}").is_not_null()
+            sub = panel.filter(keep)
+            base = measure(sub, field, k, 0, bootstrap=False)[0]
+            # The floor gates the class median only — never the significance family.
+            # Every test that was run belongs in the search that BH corrects.
+            above_floor = base is not None and abs(base) >= MIN_BASE_IC
+            for lag in LAGS:
+                ic, t, p = measure(sub, field, k, lag, bootstrap=bootstrap)
+                rows.append(
+                    dict(
+                        field=field,
+                        class_=class_,
+                        horizon=k,
+                        lag=lag,
+                        ic=ic,
+                        base_ic=base,
+                        above_floor=above_floor,
+                        t=t,
+                        p=p,
+                        retention=(
+                            None if ic is None or not base else ic / base
+                        ),
+                    )
                 )
-            )
-    return pl.DataFrame(rows)
+    out = pl.DataFrame(rows)
+    if out.height and bootstrap:
+        # One family, one bar: correct across every test in the search, not per row.
+        out = out.with_columns(
+            bh_pass=pl.Series(bh_fdr(out["p"].to_numpy(), alpha=ALPHA))
+        )
+    return out
 
 
 def class_table(rows: pl.DataFrame) -> pl.DataFrame:
@@ -392,10 +479,12 @@ def class_table(rows: pl.DataFrame) -> pl.DataFrame:
         sub = rows.filter((pl.col("class_") == class_) & (pl.col("horizon") == horizon))
         if sub.height == 0:
             continue
-        fields = sub["field"].n_unique()
+        usable = sub.filter(pl.col("above_floor"))
+        fields = usable["field"].n_unique()
         for lag in LAGS:
             at = sub.filter(pl.col("lag") == lag)
-            rets = sorted(r for r in at["retention"].drop_nulls().to_list())
+            counted = at.filter(pl.col("above_floor"))
+            rets = sorted(r for r in counted["retention"].drop_nulls().to_list())
             out.append(
                 dict(
                     class_=class_,
@@ -406,6 +495,51 @@ def class_table(rows: pl.DataFrame) -> pl.DataFrame:
                     median_retention=(
                         (rets[len(rets) // 2] + rets[(len(rets) - 1) // 2]) / 2 if rets else None
                     ),
+                    bh_pass=int(at["bh_pass"].sum()) if "bh_pass" in at.columns else None,
+                )
+            )
+    return pl.DataFrame(out)
+
+
+def replication(panel: pl.DataFrame) -> pl.DataFrame:
+    """Re-run the grid on disjoint sub-panels: is the contrast a class effect?
+
+    A class claim has to survive being measured on a different slice of the same
+    data. Time halves catch one period's accident; the liquidity split catches an
+    artefact of the most heavily traded coins.
+    """
+    hours = sorted(panel["hour"].unique().to_list())
+    mid = hours[len(hours) // 2]
+    per_coin = (
+        panel.group_by("coin")
+        .agg(med_usd_volume=pl.col("usd_volume").median())
+        .sort("med_usd_volume", descending=True)
+    )
+    ranked = per_coin["coin"].to_list()
+    third = max(1, len(ranked) // 3)
+    variants = {
+        "first half of the hours": panel.filter(pl.col("hour") < mid),
+        "second half of the hours": panel.filter(pl.col("hour") >= mid),
+        "most liquid third of coins": panel.filter(pl.col("coin").is_in(ranked[:third])),
+        "the rest": panel.filter(pl.col("coin").is_in(ranked[third:])),
+    }
+    out = []
+    for name, sub in variants.items():
+        if sub.height == 0:
+            continue
+        table = class_table(evaluate(lag_grid(sub), bootstrap=False))
+        for class_, horizon in DECISION_HORIZON.items():
+            at = table.filter(
+                (pl.col("class_") == class_) & (pl.col("horizon") == horizon) & (pl.col("lag") == 2)
+            )
+            if at.height == 0:
+                continue
+            out.append(
+                dict(
+                    variant=name,
+                    class_=class_,
+                    fields=int(at["fields"][0]),
+                    retention_at_2h=at["median_retention"][0],
                 )
             )
     return pl.DataFrame(out)
@@ -459,13 +593,40 @@ def main() -> None:
             "fields",
         )
     )
-    print("\nper field at the decision horizon\n")
+    print("\nper field at its class's decision horizon\n")
+    decision = pl.DataFrame(
+        [
+            {"class_": c, "horizon": h}
+            for c, h in DECISION_HORIZON.items()
+        ]
+    )
+    rows_at_decision = rows.join(decision, on=["class_", "horizon"], how="semi")
     print(
-        rows.filter(pl.col("lag").is_in([0, 2, 24]))
+        rows_at_decision.filter(pl.col("lag").is_in([0, 2, 24]))
         .pivot(on="lag", index=["field", "class_", "horizon"], values="ic")
         .rename({"0": "ic@0h", "2": "ic@2h", "24": "ic@24h"})
         .sort("class_", "field")
     )
+
+    print("\nthe family bar: how many tests clear the joint BH threshold at each delay\n")
+    print(
+        rows.group_by("lag")
+        .agg(
+            tests=pl.len(),
+            bh_pass=pl.col("bh_pass").sum(),
+            share=(pl.col("bh_pass").mean() * 100).round(0),
+        )
+        .sort("lag")
+    )
+
+    print("\nreplication: the class contrast on disjoint sub-panels (retention at a 2h entry)\n")
+    print(
+        replication(panel)
+        .sort("variant", "class_")
+        .pivot(on="class_", index="variant", values="retention_at_2h")
+        .with_columns(pl.all().exclude("variant").round(3))
+    )
+
     if args.out:
         rows.write_parquet(args.out)
 

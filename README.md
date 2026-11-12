@@ -53,7 +53,9 @@ They are measurements, not strategies. Every one is written to be checked rather
 - **Stated floors.** A factor with a zero-delay IC below the materiality floor is excluded from a
   class median instead of being quietly averaged in.
 - **The window is part of the result.** A one-month run and a thirteen-month run give the same
-  ordering and different digits. Both are printed.
+  ordering and different digits. The class curve, the search-wide significance bar and the
+  replication split all sharpen with a longer sample; each example's README says what to expect
+  from the span you can afford.
 
 If a number here disagrees with a post, the post is citing the longer run — the docstring says
 which span each figure belongs to.
