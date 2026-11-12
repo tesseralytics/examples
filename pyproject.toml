@@ -1,0 +1,9 @@
+[project]
+name = "tessera-examples"
+version = "0.1.0"
+description = "Runnable examples for the Tessera Analytics API — the code behind our research posts"
+requires-python = ">=3.10,<3.15"
+dependencies = ["tessera-api[polars]>=0.3.1"]
+
+[tool.uv]
+package = false
