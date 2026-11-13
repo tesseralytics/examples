@@ -39,7 +39,7 @@ Python 3.10+. The only dependencies are `tessera-api` and `polars`.
 
 | directory | what it measures | post |
 |---|---|---|
-| [`lag-discount/`](lag-discount/) | How much of a factor's edge survives the delay between a bar closing and you being able to act on it. The full 24-factor panel, gap-guarded returns, cross-sectional rank IC at delays from 0 to 24 hours. | [The two-hour lag discount](https://tesseralytics.dev/blog/the-two-hour-lag-discount) |
+| [`lag-discount/`](lag-discount/) | How much of a factor's edge survives the delay between a bar closing and you being able to act on it. The full 22-factor panel, gap-guarded returns, cross-sectional rank IC at delays from 0 to 24 hours. | [The two-hour lag discount](https://tesseralytics.dev/blog/the-two-hour-lag-discount) |
 
 ## Notes on reading these scripts
 

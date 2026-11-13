@@ -45,7 +45,7 @@ At a **two-hour** entry, as a share of the zero-delay IC:
 | run | state | microstructure | momentum |
 |---|---|---|---|
 | one month (2026-10, 291 coins) | 98 % | 20 % | 76 % |
-| thirteen months (225 coins) | 98 % | 7 % | 58 % |
+| thirteen months (225 coins) | 99 % | 7 % | 58 % |
 
 The ordering is the result; the digits move with the window. A single month is one regime and one
 universe, and thirteen months contains more of both — which is what takes the flow class from a
@@ -53,11 +53,12 @@ fifth to almost nothing.
 
 The other two tables are noisier on a short window, by design and by arithmetic:
 
-- **The family bar** (how many of the 72 factor × horizon tests clear the search-wide
+- **The family bar** (how many of the 66 factor × horizon tests clear the search-wide
   Benjamini–Hochberg threshold at each delay) needs a long sample to be readable: wider standard
-  errors on 700 hours mean fewer tests clear any threshold. On 2026-10 roughly a third of the 72
-  tests clear it at zero delay and a fifth at two hours; over the thirteen months behind the post
-  it is 48 → 39 → 28.
+  errors on 700 hours mean fewer tests clear any threshold. On 2026-10 three of the 66 tests clear
+  it at zero delay and none at two hours; over the thirteen months behind the post it is
+  39 → 31 → 23 on the study's universe, and 38 → 30 → 22 on this script's slightly wider one
+  (the two agree on the ordering and the class medians).
 - **The replication table** re-runs the whole grid on time halves and liquidity tiers. One month
   per half leaves some slices with no factor above the materiality floor at all, and a single
   factor's retention can exceed 100 % in a slice (the two-hour IC came out larger than the

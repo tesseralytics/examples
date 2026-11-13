@@ -28,6 +28,12 @@ opened later. Four rules make the resulting curve mean something:
     Benjamini–Hochberg bar across the whole search — then a replication run on
     disjoint sub-panels, because a class claim has to survive a different slice.
 
+Two definitions worth knowing before reading a number: `log_volume` is the log of
+the hour's traded *notional*, because base units are not comparable across coins;
+and three columns (`mom_1h`, `d_cvd`, `d_funding_rate`) are differences against
+the previous published row rather than gap-guarded windows, kept as the dataset
+defines them.
+
 Companion code for the post "The two-hour lag discount: building factors you can
 actually trade" — https://tesseralytics.dev/blog/the-two-hour-lag-discount
 
@@ -67,12 +73,14 @@ LAGS = (0, 1, 2, 4, 8, 24)
 #: The mechanism each field belongs to, fixed from its definition. State = a
 #: level or cumulative snapshot of where the market stands. Microstructure = a
 #: quantity measured inside hour H, describing hour H. Momentum = a price path.
+#: No two fields are the same measurement: `annualized_funding` is `funding_rate`
+#: times 8760 and `top10_skew` is `-concentration_skew`, so a class median that
+#: counted them would count one field twice.
 CLASSES: dict[str, str] = {
     # -- state -----------------------------------------------------------------
     "log_open_interest": "state",
     "log_volume": "state",
     "funding_rate": "state",
-    "annualized_funding": "state",
     "cum_funding": "state",
     "d_funding_rate": "state",
     "account_ls_ratio": "state",
@@ -80,7 +88,6 @@ CLASSES: dict[str, str] = {
     "whale_long_account_share": "state",
     "concentration_skew": "state",
     "hhi_gross": "state",
-    "top10_skew": "state",
     "d_open_interest": "state",
     # -- microstructure --------------------------------------------------------
     "close_vwap_dev": "microstructure",
@@ -127,13 +134,11 @@ OHLCV_COLS = [
     "closed_pnl_long",
     "closed_pnl_short",
 ]
-FUNDING_COLS = ["time", "funding_rate", "annualized", "cum_funding"]
+FUNDING_COLS = ["time", "funding_rate", "cum_funding"]
 POSITIONING_COLS = [
     "time",
     "open_interest",
     "account_ls_ratio",
-    "top10_long_share",
-    "top10_short_share",
     "concentration_skew",
     "hhi_gross",
     "whale_net_position",
@@ -218,7 +223,10 @@ def hourly_ohlcv(minutes: pl.DataFrame) -> pl.DataFrame:
         .sort("coin", "hour")
     )
     return hourly.with_columns(
-        log_volume=(pl.col("volume").clip(lower_bound=0) + 1.0).log(),
+        # Notional, not base units: `volume` is coin-denominated, so ranking coins
+        # by it ranks unit price as much as size. `usd_volume` is the only
+        # cross-coin comparable size, and the unit the liquidity floor uses.
+        log_volume=(pl.col("usd_volume").clip(lower_bound=0) + 1.0).log(),
         close_vwap_dev=pl.when(pl.col("vwap") > 0)
         .then(pl.col("close") / pl.col("vwap") - 1.0)
         .otherwise(None),
@@ -246,10 +254,9 @@ def hourly_funding(funding: pl.DataFrame) -> pl.DataFrame:
         .with_columns(hour=pl.col("time").dt.truncate("1h"))
         .sort("coin", "hour")
         .with_columns(
-            annualized_funding=pl.col("annualized"),
             d_funding_rate=pl.col("funding_rate") - pl.col("funding_rate").shift(1).over("coin"),
         )
-        .select("coin", "hour", "funding_rate", "annualized_funding", "cum_funding", "d_funding_rate")
+        .select("coin", "hour", "funding_rate", "cum_funding", "d_funding_rate")
     )
 
 
@@ -269,7 +276,6 @@ def hourly_positioning(pos: pl.DataFrame) -> pl.DataFrame:
             "d_open_interest",
             "flow_vs_snapshot_oi_residual",
             "net_taker_open_1h",
-            top10_skew=(pl.col("top10_long_share") - pl.col("top10_short_share")),
             log_open_interest=(pl.col("open_interest").clip(lower_bound=0) + 1.0).log(),
             oi_net_flow=(pl.col("oi_opened") - pl.col("oi_closed")),
             pos_aggressor_delta_1h=pl.col("aggressor_delta_1h"),
@@ -331,11 +337,13 @@ def lag_grid(panel: pl.DataFrame) -> pl.DataFrame:
     """One forward return per (horizon, lag), gap-guarded over the whole span."""
     df = panel
     for k in HORIZONS:
-        span = max(LAGS) + k
-        window = pl.col("close").is_not_null()
-        for s in range(1, span + 1):
-            window = window & pl.col("close").shift(-s).is_not_null()
         for lag in LAGS:
+            span = lag + k
+            # Every hour from H to H+L+k must be present AND priced for this coin,
+            # otherwise a data hole masquerades as a short return.
+            window = pl.col("close").is_not_null()
+            for s in range(1, span + 1):
+                window = window & pl.col("close").shift(-s).is_not_null()
             df = df.with_columns(
                 pl.when(window)
                 .then(
@@ -349,7 +357,12 @@ def lag_grid(panel: pl.DataFrame) -> pl.DataFrame:
 
 
 def rank_ic(df: pl.DataFrame, field: str, ret: str) -> pl.DataFrame:
-    """Cross-sectional Spearman IC per hour (average ranks for ties)."""
+    """Cross-sectional Spearman IC per hour (average ranks for ties).
+
+    Sorted by hour: the bootstrap resamples *adjacent* ICs, and a shuffled
+    series would make overlapping returns look independent and the t-statistic
+    too large by roughly `sqrt(k + L)`.
+    """
     return (
         df.filter(pl.col(field).is_not_null() & pl.col(ret).is_not_null())
         .group_by("hour")
@@ -359,6 +372,7 @@ def rank_ic(df: pl.DataFrame, field: str, ret: str) -> pl.DataFrame:
         )
         .filter(pl.col("n") >= MIN_COINS)
         .drop_nulls("ic")
+        .sort("hour")
     )
 
 
