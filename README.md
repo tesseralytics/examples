@@ -12,7 +12,9 @@
 
 Every analysis published on the [Tessera blog](https://tesseralytics.dev/blog) ships with the
 script that produced it. This repository is where those scripts live: each directory is one post,
-self-contained, and prints the numbers that post quotes.
+self-contained, and prints the measurements behind that post that its README says the span can
+check. The published tables are the longer run; where a script deliberately omits a table, its
+README says so.
 
 The data comes from [Tessera](https://tesseralytics.dev): order-flow-enriched Hyperliquid OHLCV,
 funding and positioning, as Parquet over a REST API. A **free key** needs no card and reaches every
@@ -31,14 +33,16 @@ export TESSERA_API_KEY="sk_..."
 
 # uv resolves the environment from pyproject.toml (pip install -e . works too)
 uv run python lag-discount/lag_discount.py --months 2026-10:2026-10
+uv run python oi-composition/oi_composition.py --months 2026-10:2026-10
 ```
 
-Python 3.10+. The only dependencies are `tessera-api` and `polars`.
+Python 3.10+. The only dependencies are `tessera-api`, `polars` and `numpy`.
 
 ## What's here
 
 | directory | what it measures | post |
 |---|---|---|
+| [`oi-composition/`](oi-composition/) | Whether open interest tells you *who* arrived. The account-level transitions decomposed into eight scale-free fields, split into crypto perpetuals and HIP-3 markets because the two disagree. | [Open interest has no direction. Its composition does.](https://tesseralytics.dev/blog/oi-composition) |
 | [`lag-discount/`](lag-discount/) | How much of a factor's edge survives the delay between a bar closing and you being able to act on it. The full 22-factor panel, gap-guarded returns, cross-sectional rank IC at delays from 0 to 24 hours. | [The two-hour lag discount](https://tesseralytics.dev/blog/the-two-hour-lag-discount) |
 
 ## Notes on reading these scripts
