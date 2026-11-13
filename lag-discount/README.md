@@ -5,7 +5,7 @@ trade](https://tesseralytics.dev/blog/the-two-hour-lag-discount).
 
 ## What it measures
 
-A factor is a column that ranks the market — open interest, funding, this hour's buy/sell
+A factor is a column that ranks the market: open interest, funding, this hour's buy/sell
 imbalance. Its edge is the cross-sectional rank correlation (IC) between that column and the
 forward return. The trap is that the forward return is always scored from the bar's *close*, an
 instant nobody can trade, because a bar's close is its last trade.
@@ -24,7 +24,7 @@ the zero-delay IC survives.
 ```bash
 export TESSERA_API_KEY="sk_..."        # free key: https://tesseralytics.dev
 
-# One month, every listed coin — free tier, ~10 minutes
+# One month, every listed coin: free tier, ~10 minutes
 uv run python lag-discount/lag_discount.py --months 2026-10:2026-10
 
 # The thirteen closed months behind the post's tables (~7.7 GB of minute data)
@@ -35,7 +35,7 @@ The panel is cached to `/tmp/lag-discount/panel.parquet`; add `--cached` to reus
 the entire runtime, the measurement takes seconds).
 
 Reading a whole month for every coin is a few hundred presigned requests, so the script batches
-them. If a batch trips the API rate limit you will see a 429 — lower `CHUNK` near the top of the
+them. If a batch trips the API rate limit you will see a 429. Lower `CHUNK` near the top of the
 file.
 
 ## What you should see
@@ -48,13 +48,13 @@ At a **two-hour** entry, as a share of the zero-delay IC:
 | thirteen months (225 coins) | 99 % | 7 % | 58 % |
 
 The ordering is the result; the digits move with the window. A single month is one regime and one
-universe, and thirteen months contains more of both — which is what takes the flow class from a
+universe, and thirteen months contain more of both, which is what takes the flow class from a
 fifth to almost nothing.
 
 The other two tables are noisier on a short window, by design and by arithmetic:
 
 - **The family bar** (how many of the 66 factor × horizon tests clear the search-wide
-  Benjamini–Hochberg threshold at each delay) needs a long sample to be readable: wider standard
+  Benjamini-Hochberg threshold at each delay) needs a long sample to be readable: wider standard
   errors on 700 hours mean fewer tests clear any threshold. On 2026-10 three of the 66 tests clear
   it at zero delay and none at two hours; over the thirteen months behind the post it is
   39 → 31 → 23 on the study's universe, and 38 → 30 → 22 on this script's slightly wider one
@@ -69,11 +69,11 @@ The other two tables are noisier on a short window, by design and by arithmetic:
 
 Fixed by what each number *is*, before the curve is looked at:
 
-- **state** — a level or cumulative snapshot of where the market stands: `log_open_interest`,
+- **state**: a level or cumulative snapshot of where the market stands: `log_open_interest`,
   `log_volume`, `funding_rate`, `cum_funding`, `whale_long_account_share`, and friends.
-- **microstructure** — a quantity measured *inside* hour H, describing hour H: `close_vwap_dev`,
+- **microstructure**: a quantity measured *inside* hour H, describing hour H: `close_vwap_dev`,
   `buysell_imbalance`, `d_cvd`, `pnl_imbalance`.
-- **momentum** — a price path: `mom_1h`.
+- **momentum**: a price path: `mom_1h`.
 
 The exception worth knowing: `pnl_imbalance` is computed inside the hour but survives the delay,
 because it saturates at ±1 and so carries the last hour's *side* rather than a magnitude. It

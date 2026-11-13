@@ -7,25 +7,25 @@ cross-sectional rank correlation (IC) between that column and the return over th
 next `k` hours.
 
 The trap: the return is always scored from the price at the *close* of the hour
-the factor describes — an instant nobody can trade, because a bar's close is its
+the factor describes: an instant nobody can trade, because a bar's close is its
 last trade and does not exist until the bar ends. Real entries happen later. This
 script measures what is left when the entry slides.
 
     ret(H, k, L) = close(H + L + k) / close(H + L) - 1
 
 `L` moves the *entry*, never the holding period: still a `k`-hour position, just
-opened later. Four rules make the resulting curve mean something:
+opened later. Five rules make the resulting curve mean something:
 
-  * gap-guarded — a return is null unless every hour from H to H+L+k is published,
+  * gap-guarded: a return is null unless every hour from H to H+L+k is published,
     so a hole can never masquerade as a short return;
-  * identical cells at every lag — for a given `k`, a coin-hour is kept only if
+  * identical cells at every lag: for a given `k`, a coin-hour is kept only if
     *every* lag has a price, so the 24h lag is not measured on a different sample;
-  * one class per mechanism — fields are grouped by what they *measure*, fixed
+  * one class per mechanism: fields are grouped by what they *measure*, fixed
     before the curve is looked at, so the classification cannot be circular;
   * the class median only over fields with a real zero-delay IC: a retention ratio
     on a field with no edge is noise over noise;
   * an overlap-aware t (circular block bootstrap of length horizon + delay) and one
-    Benjamini–Hochberg bar across the whole search — then a replication run on
+    Benjamini-Hochberg bar across the whole search, then a replication run on
     disjoint sub-panels, because a class claim has to survive a different slice.
 
 Two definitions worth knowing before reading a number: `log_volume` is the log of
@@ -35,7 +35,9 @@ the previous published row rather than gap-guarded windows, kept as the dataset
 defines them.
 
 Companion code for the post "The two-hour lag discount: building factors you can
-actually trade" — https://tesseralytics.dev/blog/the-two-hour-lag-discount
+actually trade":
+
+    https://tesseralytics.dev/blog/the-two-hour-lag-discount
 
 Setup:
 
@@ -315,7 +317,7 @@ def universe(panel: pl.DataFrame) -> list[str]:
     """The liquidity floor, applied to the *universe*, never to the cross-section.
 
     A coin needs half the hours of the best-covered coin and a positive median
-    traded notional. Cutting further turns rank IC into noise — the axis to give
+    traded notional. Cutting further turns rank IC into noise. The axis to give
     up is time, not breadth.
     """
     per_coin = panel.group_by("coin").agg(
@@ -387,7 +389,7 @@ def block_bootstrap_se(
 
     Plain i.i.d. resampling is wrong here: consecutive ICs share overlapping
     forward returns, so they are serially dependent. `block` is that dependence
-    length — the holding period `k` *plus* the entry delay `L`, because sliding the
+    length: the holding period `k` *plus* the entry delay `L`, because sliding the
     entry makes the overlap longer than the label. A naive `ICIR * sqrt(n)` inflates
     the t-statistic by roughly `sqrt(k + L)`.
 
@@ -417,7 +419,7 @@ def two_sided_p(t: float | None) -> float:
 
 
 def bh_fdr(pvals: np.ndarray, alpha: float = 0.05) -> np.ndarray:
-    """Benjamini–Hochberg: True where the null is rejected, across the whole family."""
+    """Benjamini-Hochberg: True where the null is rejected, across the whole family."""
     p_arr = np.asarray(pvals, dtype=float)
     out = np.zeros(p_arr.shape, dtype=bool)
     ok = np.isfinite(p_arr)
@@ -457,7 +459,7 @@ def evaluate(panel: pl.DataFrame, bootstrap: bool = True) -> pl.DataFrame:
                 keep = keep & pl.col(f"ret_{k}_{lag}").is_not_null()
             sub = panel.filter(keep)
             base = measure(sub, field, k, 0, bootstrap=False)[0]
-            # The floor gates the class median only — never the significance family.
+            # The floor gates the class median only, never the significance family.
             # Every test that was run belongs in the search that BH corrects.
             above_floor = base is not None and abs(base) >= MIN_BASE_IC
             for lag in LAGS:
